@@ -1,4 +1,18 @@
+# Python
+__pycache__/
+*.pyc
+
+# Virtualenv
 venv/
+
+# Local environment file
+.env
+
+# Streamlit state
+.streamlit/venv/
 .env
 __pycache__/
 *.pyc
+
+# Logs
+logs/
