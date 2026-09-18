@@ -11,5 +11,5 @@ CREATE TABLE IF NOT EXISTS documents (
   chunk_char_count INTEGER NOT NULL,
   loaded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   content TEXT NOT NULL,
-  embedding vector(1536)
+  embedding vector(384)
 );

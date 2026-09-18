@@ -15,4 +15,4 @@ class Document(Base):
     chunk_char_count = Column(Integer, nullable=False)
     loaded_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     content = Column(Text, nullable=False)
-    embedding = Column(Vector(1536), nullable=True)
+    embedding = Column(Vector(384), nullable=True)

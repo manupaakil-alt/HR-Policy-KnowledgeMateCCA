@@ -5,6 +5,7 @@ import hashlib
 import logging
 import os
 import re
+from functools import lru_cache
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -51,7 +52,7 @@ def extract_text_units(document_path: Path) -> list[tuple[int, str]]:
     raise ValueError(f"Unsupported document format: {document_path.suffix}")
 
 
-def split_text(text: str, chunk_size: int = 1000, overlap: int = 150) -> list[str]:
+def _fixed_size_split_text(text: str, chunk_size: int, overlap: int) -> list[str]:
     if chunk_size <= 0 or overlap < 0 or overlap >= chunk_size:
         raise ValueError("chunk_size must be positive and overlap must be smaller than chunk_size")
 
@@ -87,6 +88,70 @@ def split_text(text: str, chunk_size: int = 1000, overlap: int = 150) -> list[st
             while start < len(text) and text[start].isspace():
                 start += 1
     return chunks
+
+
+@lru_cache(maxsize=2)
+def _load_embedding_model(model_name: str):
+    from sentence_transformers import SentenceTransformer
+
+    logger.info("Loading semantic chunking model: %s", model_name)
+    return SentenceTransformer(model_name)
+
+
+class SentenceTransformerEmbeddings:
+    """LangChain embedding adapter backed by the local MiniLM model."""
+
+    def __init__(self, model_name: str):
+        self.model = _load_embedding_model(model_name)
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        embeddings = self.model.encode(
+            texts,
+            normalize_embeddings=True,
+            show_progress_bar=False,
+        )
+        return embeddings.tolist()
+
+    def embed_query(self, text: str) -> list[float]:
+        return self.embed_documents([text])[0]
+
+
+@lru_cache(maxsize=4)
+def _load_semantic_chunker(model_name: str, breakpoint_percentile: float):
+    from langchain_experimental.text_splitter import SemanticChunker
+
+    logger.info("Loading LangChain semantic chunker with model: %s", model_name)
+    return SemanticChunker(
+        SentenceTransformerEmbeddings(model_name),
+        breakpoint_threshold_type="percentile",
+        breakpoint_threshold_amount=breakpoint_percentile,
+    )
+
+
+def semantic_split_text(
+    text: str,
+    chunk_size: int = 1000,
+    overlap: int = 150,
+    breakpoint_percentile: float = 75.0,
+    model_name: str = "all-MiniLM-L6-v2",
+) -> list[str]:
+    """Group semantically related sentences using LangChain SemanticChunker."""
+    if chunk_size <= 0 or overlap < 0 or overlap >= chunk_size:
+        raise ValueError("chunk_size must be positive and overlap must be smaller than chunk_size")
+    if not 0 <= breakpoint_percentile <= 100:
+        raise ValueError("breakpoint_percentile must be between 0 and 100")
+
+    if not text.strip():
+        return []
+
+    semantic_chunks = _load_semantic_chunker(model_name, breakpoint_percentile).split_text(text)
+    chunks: list[str] = []
+    for chunk in semantic_chunks:
+        if len(chunk) <= chunk_size:
+            chunks.append(chunk.strip())
+        else:
+            chunks.extend(_fixed_size_split_text(chunk, chunk_size, overlap))
+    return [chunk for chunk in chunks if chunk]
 
 
 def ensure_document_schema() -> None:
@@ -148,9 +213,24 @@ def ensure_document_schema() -> None:
                 """
             )
         )
+        connection.execute(
+            text(
+                """
+                ALTER TABLE documents
+                ALTER COLUMN embedding TYPE vector(384)
+                USING embedding::vector(384)
+                """
+            )
+        )
 
 
-def load_documents(data_dir: Path, chunk_size: int = 1000, overlap: int = 150) -> int:
+def load_documents(
+    data_dir: Path,
+    chunk_size: int = 1000,
+    overlap: int = 150,
+    breakpoint_percentile: float = 75.0,
+    model_name: str = "all-MiniLM-L6-v2",
+) -> int:
     document_paths = sorted(
         path for path in data_dir.iterdir()
         if path.is_file() and path.suffix.lower() in SUPPORTED_SUFFIXES
@@ -163,7 +243,13 @@ def load_documents(data_dir: Path, chunk_size: int = 1000, overlap: int = 150) -
     ensure_document_schema()
     inserted = 0
     skipped = 0
+    document_names = {path.name for path in document_paths}
     with SessionLocal() as session:
+        removed = session.query(Document).filter(
+            ~Document.document_name.in_(document_names)
+        ).delete(synchronize_session=False)
+        if removed:
+            logger.info("Removed %d chunk(s) for documents no longer in %s", removed, data_dir)
         for document_path in document_paths:
             document_hash = hashlib.sha256(document_path.read_bytes()).hexdigest()
             existing_hash = session.scalar(
@@ -171,7 +257,15 @@ def load_documents(data_dir: Path, chunk_size: int = 1000, overlap: int = 150) -
                 .where(Document.document_name == document_path.name)
                 .limit(1)
             )
-            if existing_hash == document_hash:
+            missing_embedding = session.scalar(
+                select(Document.id)
+                .where(
+                    Document.document_name == document_path.name,
+                    Document.embedding.is_(None),
+                )
+                .limit(1)
+            )
+            if existing_hash == document_hash and missing_embedding is None:
                 skipped += 1
                 logger.info("Skipped %s: unchanged document", document_path.name)
                 continue
@@ -179,7 +273,19 @@ def load_documents(data_dir: Path, chunk_size: int = 1000, overlap: int = 150) -
             session.execute(delete(Document).where(Document.document_name == document_path.name))
             document_chunks = 0
             for page_number, document_text in extract_text_units(document_path):
-                for chunk_index, content in enumerate(split_text(document_text, chunk_size, overlap)):
+                contents = semantic_split_text(
+                    document_text,
+                    chunk_size,
+                    overlap,
+                    breakpoint_percentile,
+                    model_name,
+                )
+                embeddings = _load_embedding_model(model_name).encode(
+                    contents,
+                    normalize_embeddings=True,
+                    show_progress_bar=False,
+                ) if contents else []
+                for chunk_index, (content, embedding) in enumerate(zip(contents, embeddings)):
                     session.add(
                         Document(
                             document_name=document_path.name,
@@ -189,6 +295,7 @@ def load_documents(data_dir: Path, chunk_size: int = 1000, overlap: int = 150) -
                             chunk_index=chunk_index,
                             chunk_char_count=len(content),
                             content=content,
+                            embedding=embedding.tolist(),
                         )
                     )
                     inserted += 1
@@ -213,8 +320,16 @@ def main() -> None:
     parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
     parser.add_argument("--chunk-size", type=int, default=1000)
     parser.add_argument("--overlap", type=int, default=150)
+    parser.add_argument("--breakpoint-percentile", type=float, default=75.0)
+    parser.add_argument("--model-name", default="all-MiniLM-L6-v2")
     args = parser.parse_args()
-    count = load_documents(args.data_dir, args.chunk_size, args.overlap)
+    count = load_documents(
+        args.data_dir,
+        args.chunk_size,
+        args.overlap,
+        args.breakpoint_percentile,
+        args.model_name,
+    )
     print(f"Loaded {count} document chunks from {args.data_dir}")
 
 

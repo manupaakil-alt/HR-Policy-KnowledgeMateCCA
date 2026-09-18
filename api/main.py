@@ -7,6 +7,8 @@ load_dotenv()
 from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel
 
+from agent import answer_question
+
 
 LOG_DIR = os.getenv("LOG_DIR", "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
@@ -53,7 +55,7 @@ def health_check():
 
 
 @app.post("/chat", response_model=ChatResponse)
-def chat_placeholder(request: ChatRequest):
+def chat(request: ChatRequest):
     logger.info("Received chat request")
     logger.debug("Question: %s", request.question)
     try:
@@ -62,9 +64,8 @@ def chat_placeholder(request: ChatRequest):
             logger.warning("Empty question received")
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Question must not be empty")
 
-        # Placeholder logic: in future, replace with retrieval + LLM
-        answer_text = "This is a chat placeholder response."
-        logger.info("Returning placeholder answer for question")
+        answer_text = answer_question(question)
+        logger.info("Returning agent answer for question")
         return ChatResponse(answer=answer_text)
     except HTTPException:
         raise
