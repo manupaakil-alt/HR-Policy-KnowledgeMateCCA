@@ -139,6 +139,12 @@ st.markdown(
         border: 2px solid #b9d8d4;
         border-radius: 10px;
         background: #ffffff;
+        color: #172b3a;
+        caret-color: #172b3a;
+    }
+    div[data-testid="stTextInput"] input::placeholder {
+        color: #5f7180;
+        opacity: 1;
     }
     div[data-testid="stTextInput"] input:focus {
         border-color: #187c7a;

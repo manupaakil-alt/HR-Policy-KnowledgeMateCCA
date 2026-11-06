@@ -32,7 +32,7 @@ flowchart TD
 
 - `app/main.py`: Streamlit interface for submitting questions and displaying conversation history.
 - `api/main.py`: FastAPI service with `/`, `/health`, and `/chat` endpoints.
-- `agent.py`: Uses the configured OpenAI model to classify whether a question is HR-related, then runs a LangGraph ReAct agent for related questions.
+- `agent.py`: Uses the configured OpenAI model to classify whether a question is HR-related, then runs a LangGraph ReAct agent for accepted questions.
 - `rag/load_documents.py`: Extracts, semantically chunks, embeds, and loads policy documents.
 - `rag/retriever.py`: Embeds questions and performs pgvector similarity search over stored policy chunks.
 - `app/models.py`: SQLAlchemy document-chunk model with 384-dimensional embeddings.
@@ -49,7 +49,7 @@ flowchart TD
 Install Python dependencies from the project root:
 
 ```powershell
-& ".\venv\Scripts\python.exe" -m pip install -r requirements.txt
+& ".\.venv\Scripts\python.exe" -m pip install -r requirements.txt
 ```
 
 Create a `.env` file with:
@@ -63,10 +63,13 @@ OPENAI_MODEL=gpt-4o-mini
 TAVILY_API_KEY=your-tavily-key
 ```
 
-The HR relevance check uses the configured OpenAI model and returns a
-structured yes/no result before the assistant handles the question. A
-classification or OpenAI error is surfaced; the application does not fall
-back to keyword matching.
+Before answering, the API asks the configured OpenAI model to classify the
+question as HR-related or not using a structured yes/no result. The classifier
+considers the question's meaning and context, including indirect workplace
+questions and questions about HR as a profession; it is not a keyword matcher.
+Questions accepted by the classifier are sent to the answering agent. Questions
+it rejects receive an HR-only response. Classification and OpenAI errors are
+surfaced; the application does not silently fall back to keyword matching.
 
 ## Ingest Policy Documents
 
@@ -74,7 +77,7 @@ Start PostgreSQL and load the current files in `data/`:
 
 ```powershell
 docker compose up -d db
-& ".\venv\Scripts\python.exe" -m rag.load_documents
+& ".\.venv\Scripts\python.exe" -m rag.load_documents
 ```
 
 The loader supports PDF, TXT, and Markdown files. It stores each chunk with
@@ -90,7 +93,7 @@ Ingestion logs are written to `logs/ingestion.log`.
 Start the API in one terminal:
 
 ```powershell
-& ".\venv\Scripts\python.exe" -m uvicorn api.main:app --host 127.0.0.1 --port 8000
+& ".\.venv\Scripts\python.exe" -m uvicorn api.main:app --host 127.0.0.1 --port 8000
 ```
 
 At startup, the API loads the local MiniLM embedding model used for policy
@@ -101,7 +104,7 @@ requests reuse the loaded model.
 Start the Streamlit UI in another terminal:
 
 ```powershell
-& ".\venv\Scripts\python.exe" -m streamlit run app\main.py --server.address 127.0.0.1 --server.port 8501
+& ".\.venv\Scripts\python.exe" -m streamlit run app\main.py --server.address 127.0.0.1 --server.port 8501
 ```
 
 Open the interface at <http://127.0.0.1:8501>. The API health check is
@@ -122,3 +125,8 @@ questions. Wikipedia is available without a key; Tavily requires
 External information is not company policy and should be distinguished from
 internal evidence. Internal evidence should be cited with its source filename,
 page number, and chunk number; external sources should include their URLs.
+
+The relevance classifier and answering agent are separate steps. The
+classifier runs once before the agent; the agent does not repeat the structured
+HR relevance check. The agent's prompt focuses on answering accepted questions,
+using policy evidence and clearly distinguishing any external information.
