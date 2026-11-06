@@ -60,6 +60,7 @@ st.markdown(
         font-size: 1.35rem;
         font-weight: 800;
         box-shadow: 0 8px 18px rgba(23, 63, 95, 0.14);
+        margin-top: 0.8rem;
         margin-bottom: 0.7rem;
         margin-left: auto;
         margin-right: auto;

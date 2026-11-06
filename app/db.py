@@ -10,7 +10,7 @@ from sqlalchemy.orm import sessionmaker
 # Read database URL from environment, fall back to local docker-compose default
 DATABASE_URL = os.getenv(
 	"DATABASE_URL",
-	"postgresql://postgres:postgres@localhost:5433/knowledgemate",
+	"postgresql://postgres:postgres@localhost:5434/knowledgemate",
 )
 
 engine = create_engine(DATABASE_URL)

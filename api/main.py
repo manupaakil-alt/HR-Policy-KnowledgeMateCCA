@@ -8,6 +8,7 @@ from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel
 
 from agent import answer_question
+from rag.retriever import warm_embedding_model
 
 
 LOG_DIR = os.getenv("LOG_DIR", "logs")
@@ -40,6 +41,9 @@ class ChatResponse(BaseModel):
 @app.on_event("startup")
 def on_startup():
     logger.info("Starting HR Policy KnowledgeMate API")
+    logger.info("Loading policy retrieval embedding model")
+    warm_embedding_model()
+    logger.info("Policy retrieval embedding model is ready")
 
 
 @app.get("/")

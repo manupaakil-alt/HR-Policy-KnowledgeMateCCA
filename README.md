@@ -32,19 +32,19 @@ flowchart TD
 
 - `app/main.py`: Streamlit interface for submitting questions and displaying conversation history.
 - `api/main.py`: FastAPI service with `/`, `/health`, and `/chat` endpoints.
-- `agent.py`: LangGraph ReAct agent created with `create_react_agent()`.
+- `agent.py`: Uses the configured OpenAI model to classify whether a question is HR-related, then runs a LangGraph ReAct agent for related questions.
 - `rag/load_documents.py`: Extracts, semantically chunks, embeds, and loads policy documents.
-- `rag/retriever.py`: Performs pgvector similarity search over stored policy chunks.
+- `rag/retriever.py`: Embeds questions and performs pgvector similarity search over stored policy chunks.
 - `app/models.py`: SQLAlchemy document-chunk model with 384-dimensional embeddings.
-- `docker-compose.yml`: Runs PostgreSQL with the pgvector extension on port `5433`.
+- `docker-compose.yml`: Runs PostgreSQL with the pgvector extension on port `5434`.
 - `data/`: Current NovaCare policy PDFs.
 
 ## Requirements
 
 - Python 3.13 or compatible Python version
 - Docker Desktop
-- OpenAI API key for agent responses
-- Optional Tavily API key for current web search
+- OpenAI API key for HR-topic classification and agent responses
+- Optional Tavily API key for current web search; Wikipedia search does not require an API key
 
 Install Python dependencies from the project root:
 
@@ -55,12 +55,18 @@ Install Python dependencies from the project root:
 Create a `.env` file with:
 
 ```text
-DATABASE_URL=postgresql://postgres:postgres@localhost:5433/knowledgemate
+DATABASE_URL=postgresql://postgres:postgres@localhost:5434/knowledgemate
 API_URL=http://localhost:8000/chat
 OPENAI_API_KEY=your-openai-key
 OPENAI_MODEL=gpt-4o-mini
+# Optional: enable Tavily web search
 TAVILY_API_KEY=your-tavily-key
 ```
+
+The HR relevance check uses the configured OpenAI model and returns a
+structured yes/no result before the assistant handles the question. A
+classification or OpenAI error is surfaced; the application does not fall
+back to keyword matching.
 
 ## Ingest Policy Documents
 
@@ -87,6 +93,11 @@ Start the API in one terminal:
 & ".\venv\Scripts\python.exe" -m uvicorn api.main:app --host 127.0.0.1 --port 8000
 ```
 
+At startup, the API loads the local MiniLM embedding model used for policy
+retrieval. The first startup can take longer while the model is downloaded and
+initialized; wait for startup to complete before sending chat requests. Later
+requests reuse the loaded model.
+
 Start the Streamlit UI in another terminal:
 
 ```powershell
@@ -98,13 +109,16 @@ available at <http://127.0.0.1:8000/health>.
 
 ## Agent Behavior
 
-The LangGraph agent receives the user's question and can select from three
-tools:
+After the LLM-based HR relevance check accepts a question, the LangGraph agent
+receives it and can select from three tools:
 
 1. The internal pgvector retriever for NovaCare policy evidence.
 2. Wikipedia for general HR background.
 3. Tavily for current web information when `TAVILY_API_KEY` is configured.
 
-The application rejects questions unrelated to HR and workplace topics before
-invoking the agent. Internal evidence should be cited with its source filename,
-page number, and chunk number.
+The agent is instructed to use the internal retriever first for company-policy
+questions. Wikipedia is available without a key; Tavily requires
+`TAVILY_API_KEY`. The agent chooses whether external searches are useful.
+External information is not company policy and should be distinguished from
+internal evidence. Internal evidence should be cited with its source filename,
+page number, and chunk number; external sources should include their URLs.

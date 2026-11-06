@@ -27,6 +27,11 @@ def _embedding_model(model_name: str):
     return SentenceTransformer(model_name)
 
 
+def warm_embedding_model(model_name: str = "all-MiniLM-L6-v2") -> None:
+    """Load the embedding model before it is needed by a chat request."""
+    _embedding_model(model_name)
+
+
 def retrieve_chunks(
     question: str,
     top_k: int = 5,
